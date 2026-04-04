@@ -183,8 +183,10 @@ func (s *Server) OFREPFlagEvaluationBulk(ctx context.Context, r *ofrep.EvaluateB
 	return &ofrep.BulkEvaluationResponse{
 		Flags: responses,
 		EventStreams: []*ofrep.EventStream{{
-			Type:     "sse",
-			Endpoint: fmt.Sprintf("/client/v2/environments/%s/namespaces/%s/stream", env.Key(), namespaceKey),
+			Type: "sse",
+			Endpoint: &ofrep.EventStreamEndpoint{
+				RequestUri: fmt.Sprintf("/client/v2/environments/%s/namespaces/%s/stream", env.Key(), namespaceKey),
+			},
 		}},
 	}, nil
 }

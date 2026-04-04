@@ -336,3 +336,87 @@ func TestOFREPEvaluationWithTracing(t *testing.T) {
 		})
 	}
 }
+
+func TestOFREPFlagEvaluationBulk(t *testing.T) {
+	var (
+		flagKey        = "test-flag"
+		environmentKey = "test-environment"
+		namespaceKey   = "test-namespace"
+		envStore       = NewMockEnvironmentStore(t)
+		environment    = environments.NewMockEnvironment(t)
+		store          = storage.NewMockReadOnlyStore(t)
+		logger         = zaptest.NewLogger(t)
+		s              = New(logger, envStore)
+		flag           = &core.Flag{
+			Key:     flagKey,
+			Enabled: true,
+			Type:    core.FlagType_VARIANT_FLAG_TYPE,
+		}
+	)
+
+	environment.On("Key").Return(environmentKey)
+
+	envStore.On("GetFromContext", mock.Anything).Return(environment, nil)
+	environment.On("EvaluationStore").Return(store, nil)
+
+	store.On("GetFlag", mock.Anything, mock.Anything).Return(flag, nil)
+
+	store.On("ListFlags", mock.Anything, mock.Anything).Return(storage.ResultSet[*core.Flag]{
+		Results: []*core.Flag{flag},
+	}, nil)
+
+	store.On("GetEvaluationRules", mock.Anything, mock.Anything).Return([]*storage.EvaluationRule{
+		{
+			ID:      "1",
+			FlagKey: flagKey,
+			Rank:    0,
+			Segments: map[string]*storage.EvaluationSegment{
+				"bar": {
+					SegmentKey: "bar",
+					MatchType:  core.MatchType_ANY_MATCH_TYPE,
+				},
+			},
+		},
+	}, nil)
+
+	store.On(
+		"GetEvaluationDistributions",
+		mock.Anything,
+		storage.NewResource(namespaceKey, flagKey),
+		storage.NewID("1"),
+	).Return([]*storage.EvaluationDistribution{
+		{
+			ID:         "4",
+			RuleID:     "1",
+			VariantID:  "5",
+			Rollout:    100,
+			VariantKey: "boz",
+		},
+	}, nil)
+
+	ctx := metadata.NewIncomingContext(context.TODO(), metadata.New(map[string]string{
+		"x-flipt-environment": environmentKey,
+		"x-flipt-namespace":   namespaceKey,
+	}))
+
+	result, err := s.OFREPFlagEvaluationBulk(ctx, &ofrep.EvaluateBulkRequest{
+		Context: map[string]string{
+			"targetingKey": "12345",
+		},
+	})
+	require.NoError(t, err)
+
+	assert.Len(t, result.Flags, 1)
+	evaluation := result.Flags[0]
+	assert.Equal(t, flagKey, evaluation.Key)
+	assert.Equal(t, ofrep.EvaluateReason_TARGETING_MATCH, evaluation.Reason)
+	assert.Equal(t, "boz", evaluation.Variant)
+
+	require.Len(t, result.EventStreams, 1)
+
+	stream := result.EventStreams[0]
+	assert.Equal(t, "sse", stream.Type)
+	assert.NotNil(t, stream.Endpoint)
+	assert.Equal(t, "/client/v2/environments/test-environment/namespaces/test-namespace/stream", stream.Endpoint.GetRequestUri())
+	assert.Empty(t, stream.Endpoint.GetOrigin())
+}
